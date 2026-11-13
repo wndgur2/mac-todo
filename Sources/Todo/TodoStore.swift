@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import Combine
 
 struct TodoItem: Identifiable, Codable, Equatable {
@@ -25,6 +25,11 @@ final class TodoStore: ObservableObject {
 
     private let fileURL: URL
 
+    /// 실행 취소/복귀용 스냅샷 (배열 전체를 저장하므로 생성·완료·편집·삭제·이동 모두 동일하게 처리)
+    private var undoStack: [[TodoItem]] = []
+    private var redoStack: [[TodoItem]] = []
+    private let historyLimit = 100
+
     init() {
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--data"), i + 1 < args.count {
@@ -39,12 +44,36 @@ final class TodoStore: ObservableObject {
         load()
     }
 
+    // MARK: - Undo / Redo
+
+    /// 변경 직전에 호출: 현재 상태를 실행 취소 스택에 쌓고 복귀 스택은 비운다
+    private func recordUndo() {
+        undoStack.append(items)
+        if undoStack.count > historyLimit { undoStack.removeFirst(undoStack.count - historyLimit) }
+        redoStack.removeAll()
+    }
+
+    func undo() {
+        guard let previous = undoStack.popLast() else { NSSound.beep(); return }
+        redoStack.append(items)
+        items = previous
+        save()
+    }
+
+    func redo() {
+        guard let next = redoStack.popLast() else { NSSound.beep(); return }
+        undoStack.append(items)
+        items = next
+        save()
+    }
+
     // MARK: - Mutations
 
     func add(title: String, note: String) {
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
         let item = TodoItem(title: t, note: note.trimmingCharacters(in: .whitespacesAndNewlines), createdAt: Date())
+        recordUndo()
         // 미완료 목록의 맨 끝(완료 항목 앞)에 추가
         let insertAt = items.lastIndex(where: { !$0.isDone }).map { $0 + 1 } ?? 0
         items.insert(item, at: insertAt)
@@ -54,6 +83,7 @@ final class TodoStore: ObservableObject {
 
     func toggleDone(_ id: UUID) {
         guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+        recordUndo()
         var item = items.remove(at: i)
         item.isDone.toggle()
         item.doneAt = item.isDone ? Date() : nil
@@ -71,12 +101,17 @@ final class TodoStore: ObservableObject {
         guard let i = items.firstIndex(where: { $0.id == id }) else { return }
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
+        let n = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard items[i].title != t || items[i].note != n else { return }
+        recordUndo()
         items[i].title = t
-        items[i].note = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        items[i].note = n
         save()
     }
 
     func delete(_ id: UUID) {
+        guard items.contains(where: { $0.id == id }) else { return }
+        recordUndo()
         items.removeAll { $0.id == id }
         save()
     }
@@ -85,7 +120,10 @@ final class TodoStore: ObservableObject {
     func movePending(from source: IndexSet, to destination: Int) {
         var p = pending
         p.move(fromOffsets: source, toOffset: destination)
-        items = p + items.filter(\.isDone)
+        let reordered = p + items.filter(\.isDone)
+        guard reordered != items else { return }
+        recordUndo()
+        items = reordered
         save()
     }
 

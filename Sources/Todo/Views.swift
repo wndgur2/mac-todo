@@ -41,6 +41,13 @@ enum EditState {
     static let alwaysShowActions = CommandLine.arguments.contains("--show-actions")
 }
 
+/// 입력칸을 코드로 비운 뒤 남은 타이핑 실행 취소 기록을 지운다.
+/// (이후 ⌘Z가 지워진 글자를 되살리지 않고 할 일 변경을 되돌리도록)
+func clearTextUndo() {
+    NSApp.keyWindow?.firstResponder?.undoManager?.removeAllActions()
+    NSApp.keyWindow?.undoManager?.removeAllActions()
+}
+
 // MARK: - Add bar
 
 struct AddBar: View {
@@ -59,9 +66,10 @@ struct AddBar: View {
                 .font(.system(size: compact ? 14 : 15, weight: .semibold))
                 .focused($focus, equals: .title)
                 .onSubmit(add)
-            TextField("비고", text: $note)
+            TextField("비고", text: $note, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
+                .lineLimit(1...6)
                 .focused($focus, equals: .note)
                 .onSubmit(add)
         }
@@ -80,6 +88,7 @@ struct AddBar: View {
         title = ""
         note = ""
         focus = .title
+        clearTextUndo()
     }
 }
 
@@ -168,9 +177,10 @@ struct TodoRow: View {
                 .font(.system(size: compact ? 13.5 : 14.5, weight: .semibold))
                 .focused($editFocus)
                 .onSubmit(commitEdit)
-            TextField("비고", text: $editNote)
+            TextField("비고", text: $editNote, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
+                .lineLimit(1...8)
                 .onSubmit(commitEdit)
             HStack(spacing: 8) {
                 Button("저장", action: commitEdit).keyboardShortcut(.defaultAction)
@@ -195,6 +205,7 @@ struct TodoRow: View {
     private func commitEdit() {
         store.update(item.id, title: editTitle, note: editNote)
         editing = false
+        clearTextUndo()
     }
 }
 
