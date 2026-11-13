@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         setupStatusItem()
         showWindow()
         installEscapeToClose()
+        installKeyShortcuts()
         handleSnapshotRequest()
     }
 
@@ -34,6 +35,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             return event
         }
+    }
+
+    /// ⌘Z / ⇧⌘Z 실행 취소·복귀, 비고 칸 ⇧Enter 줄바꿈.
+    /// 팝오버(Dock 없는 상태)에서도 동작하도록 메뉴 단축키 대신 이벤트 모니터로 처리한다.
+    private func installKeyShortcuts() {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let window = event.window ?? NSApp.keyWindow
+            let textView = window?.firstResponder as? NSTextView
+            if let tv = textView, tv.hasMarkedText() { return event }  // 한글 조합 중
+
+            // ⌘Z / ⇧⌘Z
+            if event.charactersIgnoringModifiers?.lowercased() == "z",
+               mods == .command || mods == [.command, .shift] {
+                self.performUndo(redo: mods.contains(.shift), in: window)
+                return nil
+            }
+
+            // 비고(여러 줄 입력칸)에서 ⇧Enter → 커서 위치에 줄바꿈
+            if event.keyCode == 36 || event.keyCode == 76, mods == .shift,
+               let tv = textView, Self.isMultilineField(tv) {
+                tv.insertNewlineIgnoringFieldEditor(nil)
+                return nil
+            }
+            return event
+        }
+    }
+
+    /// 입력 중인 텍스트가 있으면 텍스트 실행 취소, 아니면 할 일 변경(생성·완료·편집·삭제·이동) 실행 취소
+    private func performUndo(redo: Bool, in window: NSWindow? = NSApp.keyWindow) {
+        if let tv = window?.firstResponder as? NSTextView, let um = tv.undoManager {
+            let textCan = redo ? um.canRedo : um.canUndo
+            // 행 편집 중에는 텍스트만 되돌린다 (편집 중인 항목이 사라지는 것 방지)
+            if EditState.isEditing || (textCan && !tv.string.isEmpty) {
+                if textCan { redo ? um.redo() : um.undo() } else { NSSound.beep() }
+                return
+            }
+        }
+        redo ? TodoStore.shared.redo() : TodoStore.shared.undo()
+    }
+
+    @objc private func undoAction(_ sender: Any?) { performUndo(redo: false) }
+    @objc private func redoAction(_ sender: Any?) { performUndo(redo: true) }
+
+    /// SwiftUI `TextField(axis: .vertical)` 의 필드 편집기인지 (줄바꿈 허용 칸)
+    private static func isMultilineField(_ tv: NSTextView) -> Bool {
+        guard tv.isFieldEditor, let field = tv.delegate as? NSTextField else { return false }
+        return !field.usesSingleLineMode && field.cell?.isScrollable == false
     }
 
     /// 디버그용: `--snapshot <dir>` 로 실행하면 메인 창/팝오버를 PNG로 저장 (화면 녹화 권한 불필요)
@@ -182,9 +232,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let editItem = NSMenuItem()
         let editMenu = NSMenu(title: "편집")
-        editMenu.addItem(withTitle: "실행 취소", action: Selector(("undo:")), keyEquivalent: "z")
-        let redo = editMenu.addItem(withTitle: "실행 복귀", action: Selector(("redo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "실행 취소", action: #selector(undoAction(_:)), keyEquivalent: "z").target = self
+        let redo = editMenu.addItem(withTitle: "실행 복귀", action: #selector(redoAction(_:)), keyEquivalent: "z")
         redo.keyEquivalentModifierMask = [.command, .shift]
+        redo.target = self
         editMenu.addItem(.separator())
         editMenu.addItem(withTitle: "오려두기", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         editMenu.addItem(withTitle: "복사하기", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
